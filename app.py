@@ -6,11 +6,15 @@ import uuid
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import Flask, render_template, request, jsonify, send_file, session
+from flask_cors import CORS
 import threading
 import time
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key-change-this'
+app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
+
+# Enable CORS
+CORS(app)
 
 # Database setup
 DB_PATH = 'youtubeclone.db'
@@ -70,7 +74,7 @@ def init_db():
         FOREIGN KEY (channel_id) REFERENCES users(id)
     )''')
     
-    # Messages table (for direct messaging)
+    # Messages table
     c.execute('''CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         sender_id TEXT NOT NULL,
@@ -82,7 +86,7 @@ def init_db():
         FOREIGN KEY (receiver_id) REFERENCES users(id)
     )''')
     
-    # Conversations table (for chat grouping)
+    # Conversations table
     c.execute('''CREATE TABLE IF NOT EXISTS conversations (
         id TEXT PRIMARY KEY,
         user1_id TEXT NOT NULL,
@@ -241,7 +245,6 @@ def get_user(user_id):
     if not user:
         return jsonify({'error': 'User not found'}), 404
     
-    # Get user's videos
     c.execute('SELECT id, title, views, created_at FROM videos WHERE user_id = ? ORDER BY created_at DESC',
              (user_id,))
     videos = [dict(v) for v in c.fetchall()]
@@ -305,7 +308,6 @@ def get_video(video_id):
     conn = get_db()
     c = conn.cursor()
     
-    # Get video info
     c.execute('''SELECT v.*, u.username, u.id as user_id, u.subscribers
                  FROM videos v
                  JOIN users u ON v.user_id = u.id
@@ -316,10 +318,8 @@ def get_video(video_id):
     if not video:
         return jsonify({'error': 'Video not found'}), 404
     
-    # Increment views
     c.execute('UPDATE videos SET views = views + 1 WHERE id = ?', (video_id,))
     
-    # Get comments
     c.execute('''SELECT c.id, c.text, c.likes, c.created_at, u.username, u.id as user_id
                  FROM comments c
                  JOIN users u ON c.user_id = u.id
@@ -493,7 +493,6 @@ def get_messages(other_user_id):
     
     messages = [dict(m) for m in c.fetchall()]
     
-    # Mark messages as read
     c.execute('''UPDATE messages SET read = 1
                  WHERE receiver_id = ? AND sender_id = ?''',
             (session['user_id'], other_user_id))
@@ -518,12 +517,10 @@ def send_message(receiver_id):
     conn = get_db()
     c = conn.cursor()
     
-    # Insert message
     c.execute('''INSERT INTO messages (id, sender_id, receiver_id, text)
                VALUES (?, ?, ?, ?)''',
             (message_id, session['user_id'], receiver_id, text))
     
-    # Update or create conversation
     user1, user2 = min(session['user_id'], receiver_id), max(session['user_id'], receiver_id)
     
     try:
@@ -592,15 +589,35 @@ def get_unread_count():
     
     return jsonify({'unread_count': result['count']}), 200
 
-# ========== HOMEPAGE ==========
+# ========== HEALTH CHECK ==========
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint"""
+    return jsonify({'status': 'ok'}), 200
+
+# ========== SERVE FRONTEND ==========
 
 @app.route('/')
 def index():
     """Serve the frontend"""
     return render_template('index.html')
 
+# ========== ERROR HANDLERS ==========
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Not found'}), 404
+
+@app.errorhandler(500)
+def server_error(error):
+    return jsonify({'error': 'Server error'}), 500
+
 if __name__ == '__main__':
     init_db()
     print("✅ Database initialized")
-    print("🚀 Starting YouTube Clone Server on http://localhost:5000")
-    app.run(debug=True, port=5000)
+    
+    port = int(os.environ.get('PORT', 5000))
+    print(f"🚀 Starting YouTube Clone Server on port {port}")
+    
+    app.run(debug=False, host='0.0.0.0', port=port)
